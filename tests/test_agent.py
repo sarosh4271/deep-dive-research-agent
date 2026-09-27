@@ -18,6 +18,21 @@ class FakeSearchWrapper(CitationSearchWrapper):
         ]
 
 
+class RetrySearchWrapper(CitationSearchWrapper):
+    attempted_backends: list[str] = []
+
+    def results(self, query: str, max_results: int, source: str | None = None):
+        self.attempted_backends.append(self.backend)
+        if self.backend == "duckduckgo":
+            raise OSError("temporary provider failure")
+        return [{"title": "Fallback", "link": "https://example.com", "snippet": query}]
+
+
+class FailedSearchWrapper(CitationSearchWrapper):
+    def results(self, query: str, max_results: int, source: str | None = None):
+        raise OSError("temporary provider failure")
+
+
 class FakeSynthesisChain:
     def __init__(self, report: str = "# Recovered report"):
         self.report = report
@@ -47,6 +62,30 @@ def test_search_output_preserves_citation_metadata():
     assert result["title"] == "Example source"
     assert result["link"] == "https://example.com/research"
     assert "quantum computing" in result["snippet"]
+
+
+def test_search_retries_providers_independently():
+    wrapper = RetrySearchWrapper.model_construct(
+        max_results=3,
+        source="text",
+        backend="duckduckgo",
+        attempted_backends=[],
+    )
+
+    result = json.loads(wrapper.run("quantum computing"))[0]
+
+    assert result["title"] == "Fallback"
+    assert wrapper.attempted_backends == ["duckduckgo", "brave"]
+
+
+def test_search_returns_tool_message_when_all_providers_fail():
+    wrapper = FailedSearchWrapper.model_construct(
+        max_results=3, source="text", backend="duckduckgo"
+    )
+
+    output = wrapper.run("quantum computing")
+
+    assert output.startswith("No useful DuckDuckGo search results")
 
 
 def test_validate_topic_normalizes_whitespace():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
@@ -16,6 +17,8 @@ from pydantic import Field
 MAX_TOPIC_LENGTH = 500
 DEFAULT_MODEL = "gpt-4.1-mini"
 MAX_EVIDENCE_CHARS = 50_000
+SEARCH_BACKENDS = ("duckduckgo", "brave", "bing", "yahoo")
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """You are a careful research assistant. Search the web for the user's topic
 and synthesize the findings into a concise, neutral, one-page report.
@@ -67,17 +70,38 @@ class CitationSearchWrapper(DuckDuckGoSearchAPIWrapper):
     """Keep URLs and titles in DuckDuckGoSearchRun's text response."""
 
     def run(self, query: str) -> str:
-        results = self.results(query, max_results=self.max_results)
-        if not results:
-            return "No useful DuckDuckGo search results were found."
+        original_backend = self.backend
+        try:
+            for backend in SEARCH_BACKENDS:
+                try:
+                    # Avoid ddgs' `auto` backend: it can select a Wikipedia locale such as
+                    # wt.wikipedia.org, which has no DNS record. Try providers independently
+                    # so one provider failure cannot discard another provider's results.
+                    self.backend = backend
+                    results = self.results(query, max_results=self.max_results)
+                except Exception as error:
+                    logger.warning(
+                        "Search backend %s failed with %s", backend, type(error).__name__
+                    )
+                    continue
+                if results:
+                    # JSON makes each title, URL, and snippet unambiguous to the model.
+                    return json.dumps(results, ensure_ascii=False)
+        finally:
+            self.backend = original_backend
 
-        # JSON makes each title, URL, and snippet unambiguous to the model.
-        return json.dumps(results, ensure_ascii=False)
+        return "No useful DuckDuckGo search results were found; providers unavailable."
 
 
 def build_search_tool(max_results: int = 6) -> DuckDuckGoSearchRun:
     """Create the requested DuckDuckGoSearchRun tool with citation metadata."""
-    wrapper = CitationSearchWrapper(max_results=max_results, source="text")
+    wrapper = CitationSearchWrapper(
+        max_results=max_results,
+        source="text",
+        region="us-en",
+        time=None,
+        backend="duckduckgo",
+    )
     return DuckDuckGoSearchRun(
         api_wrapper=wrapper,
         description=(
