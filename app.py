@@ -13,11 +13,20 @@ from openai import (
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    NotFoundError,
     PermissionDeniedError,
     RateLimitError,
 )
 
-from research_agent import MAX_TOPIC_LENGTH, ResearchError, build_agent, research_topic
+from research_agent import (
+    MAX_MODEL_ID_LENGTH,
+    MAX_TOPIC_LENGTH,
+    MODEL_OPTIONS,
+    ResearchError,
+    build_agent,
+    research_topic,
+    resolve_model,
+)
 
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 logger = logging.getLogger(__name__)
@@ -26,7 +35,6 @@ st.set_page_config(page_title="Deep Dive Research Agent", page_icon="🔎", layo
 st.title("🔎 Deep Dive Research Agent")
 st.caption("Give the agent a topic. It searches the web and writes a cited one-page report.")
 
-MODELS = ("gpt-4.1-mini", "gpt-5-mini", "gpt-4o-mini")
 MAX_RUNS_PER_SESSION = 5
 
 
@@ -34,8 +42,11 @@ def friendly_error(error: Exception) -> str:
     """Return a useful UI error without exposing request details."""
     if isinstance(error, AuthenticationError):
         return "OpenAI rejected the API key. Check it and try again."
-    if isinstance(error, PermissionDeniedError):
-        return "This API key cannot use the selected model. Choose another model."
+    if isinstance(error, (PermissionDeniedError, NotFoundError)):
+        return (
+            "The selected model is unavailable to this API key or does not support this "
+            "agent. Choose another model ID."
+        )
     if isinstance(error, RateLimitError):
         return "The OpenAI account reached a rate, usage, or billing limit."
     if isinstance(error, BadRequestError):
@@ -58,15 +69,33 @@ with st.sidebar:
         type="password",
         help="Kept in this Streamlit session and never written by the app.",
     )
-    configured_model = os.getenv("OPENAI_CHAT_MODEL", MODELS[0])
-    model_options = list(MODELS)
-    if configured_model not in model_options:
-        model_options.insert(0, configured_model)
-    model = st.selectbox(
-        "Model",
-        model_options,
-        index=model_options.index(configured_model),
+    configured_model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini").strip()
+    default_index = (
+        MODEL_OPTIONS.index(configured_model) if configured_model in MODEL_OPTIONS else 0
     )
+    selected_model = st.selectbox(
+        "Suggested model",
+        MODEL_OPTIONS,
+        index=default_index,
+        help="Choose one of six OpenAI models known to support tool calling.",
+    )
+    custom_model = st.text_input(
+        "Custom model ID (optional)",
+        value=configured_model if configured_model not in MODEL_OPTIONS else "",
+        placeholder="Example: gpt-5.4-mini-2026-03-17",
+        max_chars=MAX_MODEL_ID_LENGTH,
+        help=(
+            "Overrides the dropdown. The model must be available to your OpenAI API key "
+            "and support Chat Completions with function calling."
+        ),
+    )
+    try:
+        model = resolve_model(selected_model, custom_model)
+        model_error = None
+        st.caption(f"Using `{model}`")
+    except ValueError as error:
+        model = selected_model
+        model_error = error
     st.divider()
     st.caption(
         "Search uses DuckDuckGo without a search API key. Generating the report requires "
@@ -93,6 +122,8 @@ if submitted:
         st.error("Enter an OpenAI API key in the sidebar.")
     else:
         try:
+            if model_error:
+                raise model_error
             with st.status("Researching the topic…", expanded=True) as status:
                 st.write("Searching multiple angles and comparing sources")
                 executor = build_agent(api_key, model)

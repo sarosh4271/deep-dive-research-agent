@@ -9,6 +9,7 @@ citations.
 - LangChain `AgentExecutor` with a tool-calling OpenAI model
 - `DuckDuckGoSearchRun` (no search API key required)
 - Multiple autonomous searches per topic
+- Six suggested OpenAI models plus a custom model-ID override
 - A 500-700 word report with inline citations and a source list
 - Automatic final synthesis if the autonomous tool loop ends without returning a report
 - Streamlit UI and Markdown report downloads
@@ -46,6 +47,10 @@ streamlit run app.py
 
 You can leave `.env` unset and paste a key into the sidebar for the current session. Never commit
 `.env` or a real API key.
+
+The sidebar includes six tool-calling model presets. To use a snapshot or another model, enter its
+OpenAI model ID in **Custom model ID**; that value overrides the dropdown. Custom models must be
+available to the supplied API key and support Chat Completions with function calling.
 
 ## Test and lint
 
